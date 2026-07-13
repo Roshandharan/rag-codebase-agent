@@ -15,13 +15,17 @@ clickable/inspectable source citations instead of an unverifiable answer.
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 
+from langchain_anthropic import ChatAnthropic
 from langchain_chroma import Chroma
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
-from langchain_openai import ChatOpenAI
+
+logger = logging.getLogger("rag-agent.retrieval")
 
 SYSTEM_PROMPT = """You are a senior engineer answering questions about a specific codebase.
 Use ONLY the provided context chunks to answer -- do not rely on prior knowledge of \
@@ -51,31 +55,42 @@ def _format_context(chunks) -> str:
     return "\n\n".join(blocks)
 
 
-def build_rag_chain(vectorstore: Chroma, k: int = 6, fetch_k: int = 20):
+def build_rag_chain(vectorstore: Chroma, k: int = 6, fetch_k: int = 20, lambda_mult: float = 0.75):
     """Return a Runnable that takes {"question": str} and returns
     {"answer": str, "sources": list[dict]}.
+
+    Defaults (k=6, fetch_k=20, lambda_mult=0.75) come from
+    scripts/eval_retrieval.py's hit-rate@k sweep against pallets/flask:
+    k=4 was consistently worse (70% hit-rate across 3 runs) than k=6+
+    (80-90%), and lambda_mult=0.75 was the only config that held 90% on
+    every run -- lambda_mult=0.5 dipped to 80% once. See README for the
+    full sweep results.
     """
     retriever = vectorstore.as_retriever(
         search_type="mmr",
-        search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": 0.5},
+        search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult},
     )
 
-    llm = ChatOpenAI(
-        model=os.getenv("CHAT_MODEL", "gpt-4o-mini"),
-        temperature=0,
-    )
+    # Opus 4.8 rejects non-default sampling params (temperature/top_p/top_k) --
+    # steer determinism via the citation-required prompt instead.
+    llm = ChatAnthropic(model=os.getenv("CHAT_MODEL", "claude-opus-4-8"))
 
     prompt = ChatPromptTemplate.from_messages(
         [("system", SYSTEM_PROMPT), ("human", USER_PROMPT)]
     )
+    generation_chain = prompt | llm | StrOutputParser()
 
     def _retrieve_and_answer(inputs: dict) -> dict:
         question = inputs["question"]
+
+        retrieval_start = time.perf_counter()
         docs = retriever.invoke(question)
+        retrieval_seconds = time.perf_counter() - retrieval_start
         context = _format_context(docs)
 
-        chain = prompt | llm | StrOutputParser()
-        answer = chain.invoke({"context": context, "question": question})
+        generation_start = time.perf_counter()
+        answer = generation_chain.invoke({"context": context, "question": question})
+        generation_seconds = time.perf_counter() - generation_start
 
         sources = [
             {
@@ -85,6 +100,23 @@ def build_rag_chain(vectorstore: Chroma, k: int = 6, fetch_k: int = 20):
             }
             for d in docs
         ]
+
+        logger.info(
+            "retrieved %d chunks in %.3fs, generated answer in %.3fs",
+            len(docs),
+            retrieval_seconds,
+            generation_seconds,
+            extra={
+                "event": "rag.retrieve",
+                "k": k,
+                "fetch_k": fetch_k,
+                "chunks_retrieved": len(docs),
+                "retrieved_files": [s["file_path"] for s in sources],
+                "retrieval_seconds": round(retrieval_seconds, 4),
+                "generation_seconds": round(generation_seconds, 4),
+            },
+        )
+
         return {"answer": answer, "sources": sources}
 
     return RunnableLambda(_retrieve_and_answer)

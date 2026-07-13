@@ -24,7 +24,7 @@ jobs:
 
       - name: Run tests
         env:
-          OPENAI_API_KEY: "sk-test-placeholder-not-a-real-key"
+          ANTHROPIC_API_KEY: "sk-ant-test-placeholder-not-a-real-key"
         run: pytest -v
 
       - name: Lint (ruff)
