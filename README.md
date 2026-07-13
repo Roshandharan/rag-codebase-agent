@@ -17,31 +17,24 @@ about explicitly.
 
 ## Architecture
 
-```
-GitHub repo URL
-      │
-      ▼
- ingestion/ingest.py      clone repo, walk files, filter to supported
-                           source extensions, skip vendored/binary dirs
-      │
-      ▼
- ingestion/chunking.py    language-aware recursive chunking
-                           (function/class-boundary aware where possible)
-      │
-      ▼
- ingestion/embed.py       OpenAI embeddings, wrapped in a cache
-                           (Redis if configured, else local disk)
-                           → persisted in a Chroma collection per repo
-      │
-      ▼
- rag/chain.py             MMR retrieval (diverse, not just top-k similar)
-                           → citation-grounded prompt → ChatOpenAI
-      │
-      ▼
- api/main.py (FastAPI)    /ingest and /ask endpoints
-      │
-      ▼
- ui/app.py (Streamlit)    chat interface, shows sources per answer
+```mermaid
+flowchart TD
+    A["GitHub repo URL"] --> B["ingestion/ingest.py<br/>clone repo · walk files · filter to<br/>supported extensions · skip vendored/binary dirs"]
+    B --> C["ingestion/chunking.py<br/>language-aware recursive chunking<br/>(function/class-boundary aware)"]
+    C --> D["ingestion/embed.py<br/>local sentence-transformers embeddings<br/>cached (Redis or local disk)"]
+    D --> E[("Chroma vector store<br/>one collection per repo")]
+    R["api/db.py<br/>SQLite repo registry<br/>(repo_url, commit_sha, collection)"] -.diff changed files.-> B
+
+    U["ui/app.py (Streamlit)<br/>chat UI, shows sources per answer"] -->|HTTP| F["api/main.py (FastAPI)<br/>/ingest and /ask"]
+    F --> B
+    F --> G["rag/chain.py<br/>MMR retrieval"]
+    E --> G
+    G --> H["ChatAnthropic (Claude)<br/>citation-grounded prompt"]
+    H --> F
+    F -->|answer + sources| U
+
+    style E fill:#2d3748,stroke:#718096,color:#fff
+    style H fill:#553c9a,stroke:#805ad5,color:#fff
 ```
 
 ## Key design decisions
@@ -54,9 +47,13 @@ GitHub repo URL
   of near-duplicate chunks (imports, boilerplate). MMR trades a little raw
   similarity for diversity across the retrieved set, so the model doesn't
   get six near-identical chunks from the same file.
+- **Local embeddings, hosted generation.** Anthropic doesn't offer an
+  embeddings endpoint, so embeddings run locally via `sentence-transformers`
+  (`all-MiniLM-L6-v2` by default) -- no API key or per-chunk cost -- while
+  answer generation uses Claude (`ChatAnthropic`).
 - **Cached embeddings.** Re-ingesting a repo (or ingesting a fork that
   shares most of its history) shouldn't re-pay for embeddings on unchanged
-  chunks. `CacheBackedEmbeddings` sits in front of the OpenAI embedding
+  chunks. `CacheBackedEmbeddings` sits in front of the local embedding
   calls; Redis is used if configured, otherwise a local file store.
 - **Citation-required prompting.** The system prompt requires a
   `(file_path, chunk N)` citation for every claim, and the API returns the
@@ -69,7 +66,7 @@ GitHub repo URL
 
 ```bash
 cp .env.example .env
-# edit .env and set OPENAI_API_KEY
+# edit .env and set ANTHROPIC_API_KEY
 
 docker compose up --build
 ```
@@ -84,7 +81,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# edit .env and set OPENAI_API_KEY
+# edit .env and set ANTHROPIC_API_KEY
 export $(grep -v '^#' .env | xargs)
 
 uvicorn api.main:app --reload --port 8000
@@ -111,6 +108,17 @@ curl -X POST http://localhost:8000/ask \
   -d '{"repo_url": "https://github.com/octocat/Hello-World", "question": "What does this repo do?"}'
 ```
 
+### Screenshots
+
+Ingesting `pallets/flask` (88 files, 573 chunks, 5.8s -- fast since
+embeddings run locally):
+
+![Ingesting a repo in the Streamlit UI](docs/screenshots/01_ingest.png)
+
+Asking a real question and getting a cited, grounded answer:
+
+![Answer with source citations](docs/screenshots/02_answer_with_citations.png)
+
 ## Testing
 
 ```bash
@@ -120,17 +128,82 @@ pytest -v
 CI runs the same suite plus `ruff` linting on every push/PR (see
 `.github/workflows/ci.yml`).
 
+## Hardening
+
+- **Persistent repo registry.** Which repos have been ingested (and at
+  which commit) lives in a small SQLite table (`api/db.py`,
+  `repo_registry.db`) instead of an in-memory set, so it survives API
+  restarts.
+- **Incremental re-ingestion.** A repeat `/ingest` call on a repo already
+  in the registry diffs the new commit against the last-ingested one
+  (`git diff --name-only`) and only re-chunks/re-embeds the files that
+  actually changed -- stale chunks for edited or removed files are
+  deleted from Chroma first. An `/ingest` call where nothing changed is a
+  near-instant no-op.
+- **Size and timeout guards.** `MAX_INGEST_FILES` / `MAX_INGEST_BYTES` cap
+  a *full* first-time ingest and return `413` if a monorepo exceeds them;
+  `INGEST_CLONE_TIMEOUT_SECONDS` bounds every git clone/fetch subprocess
+  call and surfaces as `504` on a stalled network clone.
+- **Structured retrieval logging.** Every `/ask` call logs which chunks
+  were retrieved, retrieval latency, and generation latency
+  (`rag-agent.retrieval` logger) so performance is debuggable in
+  production.
+
+## Retrieval eval
+
+`scripts/eval_retrieval.py` runs 10 hand-written `(question, expected_file)`
+pairs against a fixed test repo (`pallets/flask`) and reports
+**hit-rate@k** -- did the file the answer should come from actually show up
+in the top-k retrieved chunks?
+
+```bash
+python scripts/eval_retrieval.py            # default config (k=6, fetch_k=20, lambda_mult=0.75)
+python scripts/eval_retrieval.py --sweep    # compare several k/fetch_k/lambda_mult configs
+```
+
+Sweeping `k`, `fetch_k`, and MMR's `lambda_mult` (relevance vs. diversity
+tradeoff) over 3 repeated runs (Chroma's HNSW index is approximate-nearest-
+neighbor, so results have some run-to-run variance at this sample size):
+
+| k | fetch_k | lambda_mult | hit-rate@k (3 runs) |
+|---|---------|-------------|----------------------|
+| 4 | 15 | 0.5 | 70%, 70%, 70% |
+| 6 | 20 | 0.25 | 70%, 80%, 80% |
+| 6 | 20 | **0.5 (old default)** | 80%, 90%, 90% |
+| 6 | 20 | **0.75 (new default)** | 90%, 90%, 90% |
+| 8 | 30 | 0.5 | 90%, 90%, 90% |
+| 10 | 40 | 0.5 | 90%, 90%, 90% |
+
+Takeaways:
+- **k=4 was the clearest bottleneck** -- consistently 70% across every run,
+  well below every k≥6 config.
+- **`lambda_mult=0.75` was the only config that hit 90% on all 3 runs** --
+  `0.5` (the original default) dipped to 80% once. Weighting MMR more
+  toward pure relevance and less toward diversity helped on this
+  code-Q&A task, where near-duplicate chunks are less of a problem than
+  in general-purpose retrieval.
+- **k=8 and k=10 didn't beat k=6** on this eval set -- more retrieved
+  chunks means more context tokens per question for no measured recall
+  gain, so `k=6` stays the default.
+- `rag/chain.py::build_rag_chain` now defaults to `k=6, fetch_k=20,
+  lambda_mult=0.75` based on these results.
+
+The one consistent miss: a question about `url_for` retrieves `app.py` /
+`sansio/scaffold.py` / `sansio/app.py` instead of the file that actually
+defines it (`helpers.py`) -- those files reference and re-export `url_for`
+heavily, so they're genuinely close in embedding space to the question.
+Diagnosing that kind of near-miss is exactly what this eval is for.
+
 ## Roadmap / known limitations
 
-- Single-process in-memory registry of ingested repos (`api/main.py`) --
-  fine for a demo, would need a real table (e.g. Postgres) to survive
-  restarts or run behind multiple API replicas.
-- No incremental re-chunking on `git pull` -- currently a full re-ingest.
-  Diffing changed files between commits would make repo updates far cheaper.
-- No repo size/rate limiting -- a very large monorepo will take a while
-  to embed on first ingest.
+- SQLite is fine for a single API replica; running behind multiple
+  replicas would need a real shared table (e.g. Postgres) instead.
+- Incremental re-ingestion diffs by file path, not by chunk -- a one-line
+  change still re-embeds the whole file's chunks, not just the edited
+  region.
 
 ## Tech stack
 
-Python · LangChain · ChromaDB · OpenAI Embeddings · FastAPI · Streamlit ·
-Redis (optional embedding cache) · Docker Compose · GitHub Actions
+Python · LangChain · ChromaDB · Claude (Anthropic) · sentence-transformers ·
+FastAPI · Streamlit · Redis (optional embedding cache) · Docker Compose ·
+GitHub Actions
