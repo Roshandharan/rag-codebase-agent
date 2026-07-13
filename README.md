@@ -225,3 +225,29 @@ Diagnosing that kind of near-miss is exactly what this eval is for.
 Python · LangChain · ChromaDB · Claude (Anthropic) · sentence-transformers ·
 FastAPI · Streamlit · Redis (optional embedding cache) · Docker Compose ·
 GitHub Actions
+
+## References
+
+The core techniques this project builds on:
+
+- Lewis et al., 2020. [Retrieval-Augmented Generation for Knowledge-Intensive
+  NLP Tasks](https://arxiv.org/abs/2005.11401). The original RAG paper.
+- Carbonell & Goldstein, 1998. The Use of MMR, Diversity-Based Reranking for
+  Reordering Documents and Producing Summaries. SIGIR '98.
+  [doi:10.1145/290941.291025](https://doi.org/10.1145/290941.291025). Basis
+  for the MMR retrieval strategy in `rag/chain.py`.
+- Reimers & Gurevych, 2019. [Sentence-BERT: Sentence Embeddings using Siamese
+  BERT-Networks](https://arxiv.org/abs/1908.10084). Underlies
+  `sentence-transformers`, used here for local embeddings.
+- [all-MiniLM-L6-v2 model card](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+  -- the default embedding model.
+- [LangChain documentation](https://python.langchain.com/) --
+  `RecursiveCharacterTextSplitter.from_language`, retrievers, and the
+  `CacheBackedEmbeddings` wrapper used in `ingestion/`.
+- [ChromaDB documentation](https://docs.trychroma.com/) -- the vector store.
+- [Claude API documentation](https://platform.claude.com/docs) -- the model
+  behind `rag/chain.py`'s generation step.
+
+## Author
+
+Built by [Roshan Dharan](https://github.com/Roshandharan).
