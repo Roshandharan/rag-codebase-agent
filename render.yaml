@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: rag-codebase-agent-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: EMBEDDING_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: CHAT_MODEL
+        value: claude-opus-4-8
+      # Free plan has no persistent disk, so Chroma/the repo registry/repo
+      # clones reset on every deploy or restart -- fine for a demo, not for
+      # production. Attach a Render disk (or an external Postgres +
+      # object store) for real persistence.
+      - key: CHROMA_PERSIST_DIR
+        value: /app/chroma_db
+      - key: EMBEDDING_CACHE_DIR
+        value: /app/.cache/embeddings
+
+  - type: web
+    name: rag-codebase-agent-ui
+    runtime: docker
+    dockerfilePath: ./Dockerfile.ui
+    dockerContext: .
+    plan: free
+    envVars:
+      - key: API_URL
+        fromService:
+          type: web
+          name: rag-codebase-agent-api
+          property: host

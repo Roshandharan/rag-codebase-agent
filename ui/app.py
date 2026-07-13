@@ -14,7 +14,15 @@ import os
 import requests
 import streamlit as st
 
-API_URL = os.getenv("API_URL", "http://localhost:8000")
+def normalize_api_url(url: str) -> str:
+    """Some hosts (e.g. Render's inter-service env var references) supply a
+    bare hostname rather than a full URL -- default those to https."""
+    if not url.startswith(("http://", "https://")):
+        return f"https://{url}"
+    return url
+
+
+API_URL = normalize_api_url(os.getenv("API_URL", "http://localhost:8000"))
 
 st.set_page_config(page_title="Codebase Q&A Agent", page_icon="🔎", layout="wide")
 st.title("🔎 RAG-Powered Codebase Q&A Agent")

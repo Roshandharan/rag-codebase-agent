@@ -89,6 +89,24 @@ uvicorn api.main:app --reload --port 8000
 streamlit run ui/app.py
 ```
 
+### 3. Deploying (Render)
+
+`render.yaml` defines both services as a Render Blueprint:
+
+1. Push this repo to your own GitHub account.
+2. In the Render dashboard: **New → Blueprint**, connect the repo. Render
+   reads `render.yaml` and provisions the API and UI services.
+3. When prompted, set `ANTHROPIC_API_KEY` on the API service (it's marked
+   `sync: false` in the blueprint, so Render asks for it rather than
+   storing it in the repo).
+4. The UI service's `API_URL` is wired to the API service automatically
+   via `fromService`.
+
+Both services are on Render's free plan, which has no persistent disk --
+the Chroma index and repo registry reset on every deploy/restart. Fine for
+a demo; attach a Render disk (or move to Postgres + an external vector
+store) for anything long-lived.
+
 ## Usage
 
 1. Open the Streamlit UI, paste a GitHub repo URL (e.g.
