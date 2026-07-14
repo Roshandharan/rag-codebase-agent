@@ -107,6 +107,29 @@ the Chroma index and repo registry reset on every deploy/restart. Fine for
 a demo; attach a Render disk (or move to Postgres + an external vector
 store) for anything long-lived.
 
+**Known limitation: `/ingest` OOMs on Render's free plan.** The free tier
+caps memory at 512MB. Loading `torch` + `sentence-transformers` (needed
+for local embeddings -- see "Local embeddings, hosted generation" above)
+alongside the rest of the stack (FastAPI, LangChain, Chroma) exceeds that
+ceiling, so the API process crashes partway through even a small `/ingest`
+call and Render restarts it. `/health` and `/ask` (against an
+already-ingested repo) work fine -- it's specifically the embedding step
+that needs more headroom. Confirmed by deploying it for real: the process
+survives fine at rest, and dies specifically when `HuggingFaceEmbeddings`
+loads the model into memory, independent of repo size (a 10-file repo
+crashes it just as reliably as a large one).
+
+Options if you hit this, roughly in order of effort:
+1. Upgrade the API service to Render's Starter plan (more RAM, no code
+   changes).
+2. Swap `sentence-transformers` for a quantized ONNX runtime (e.g.
+   `fastembed`) with a much smaller memory footprint.
+3. Use a hosted embeddings API (e.g. Voyage AI, Anthropic's recommended
+   embeddings partner) instead of local embeddings, trading a small
+   per-call cost for zero local memory pressure.
+4. Run it via Docker Compose (`docs/screenshots` above are from exactly
+   this setup) or on a host with more RAM, where it works without changes.
+
 ## Usage
 
 1. Open the Streamlit UI, paste a GitHub repo URL (e.g.
@@ -219,6 +242,8 @@ Diagnosing that kind of near-miss is exactly what this eval is for.
 - Incremental re-ingestion diffs by file path, not by chunk -- a one-line
   change still re-embeds the whole file's chunks, not just the edited
   region.
+- `/ingest` OOMs on Render's free plan (512MB) -- see "Deploying (Render)"
+  above for why and the options to fix it.
 
 ## Tech stack
 
