@@ -1,10 +1,41 @@
-# RAG-Powered Codebase Q&A Agent
+<div align="center">
+
+# 🔎 RAG-Powered Codebase Q&A Agent
+
+**Point it at any public GitHub repo. Ask it questions in plain English.
+Get answers cited down to the exact file and chunk.**
+
+[![CI](https://github.com/Roshandharan/rag-codebase-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/Roshandharan/rag-codebase-agent/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen.svg)](https://rag-codebase-agent-ui.onrender.com)
+
+[Live Demo](https://rag-codebase-agent-ui.onrender.com) ·
+[API Docs](https://rag-codebase-agent-api.onrender.com/docs) ·
+[Architecture](#architecture) ·
+[Retrieval Eval](#retrieval-eval)
+
+</div>
+
+---
 
 Point this at any public GitHub repository and ask natural-language questions
 about its code. It clones the repo, chunks the source with language-aware
 splitting, embeds the chunks (with a caching layer so re-ingestion is cheap),
 and answers questions with a retrieval-augmented LLM that cites the exact
 file and chunk it drew each claim from.
+
+> **Note on the live demo:** ingestion is memory-hungry (local embedding
+> model) and currently exceeds Render's free-tier RAM -- see
+> [Known limitations](#roadmap--known-limitations). The demo UI and API
+> are live; run it via Docker Compose locally for the full ingest → ask
+> flow shown in the screenshots below.
+
+<p align="center">
+  <img src="docs/screenshots/03_live_deployment.png" width="800" alt="Live deployment on Render">
+  <br>
+  <sub><em>Live at <a href="https://rag-codebase-agent-ui.onrender.com">rag-codebase-agent-ui.onrender.com</a></em></sub>
+</p>
 
 ## Why this exists
 
