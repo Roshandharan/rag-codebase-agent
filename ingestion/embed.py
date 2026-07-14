@@ -20,6 +20,7 @@ Cache backend:
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 
 # Chroma's anonymized telemetry client is version-mismatched with the pinned
 # chromadb release and logs a "Failed to send telemetry event" warning on
@@ -39,7 +40,12 @@ PERSIST_DIRECTORY = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 CACHE_DIR = os.getenv("EMBEDDING_CACHE_DIR", "./.cache/embeddings")
 
 
+@lru_cache(maxsize=1)
 def _build_cached_embedder() -> CacheBackedEmbeddings:
+    # Loading the underlying sentence-transformers model is expensive (disk
+    # I/O + a real model load into memory) -- memoized so it happens once
+    # per process instead of on every /ingest and /ask call, which was both
+    # slow and a real contributor to OOM risk on memory-constrained hosts.
     underlying = HuggingFaceEmbeddings(
         model_name=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
     )

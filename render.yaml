@@ -21,6 +21,13 @@ services:
         value: /app/chroma_db
       - key: EMBEDDING_CACHE_DIR
         value: /app/.cache/embeddings
+      # Free plan is memory-constrained (512MB); torch/sentence-transformers
+      # spin up an OpenMP thread pool per process by default, which adds
+      # avoidable memory overhead at this scale.
+      - key: OMP_NUM_THREADS
+        value: "1"
+      - key: TOKENIZERS_PARALLELISM
+        value: "false"
 
   - type: web
     name: rag-codebase-agent-ui

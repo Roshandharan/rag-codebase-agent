@@ -14,6 +14,11 @@ def isolated_stores(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(embed_module, "PERSIST_DIRECTORY", str(tmp_path / "chroma_db"))
     monkeypatch.setattr(embed_module, "CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("REDIS_URL", raising=False)
+    # _build_cached_embedder is memoized (see ingestion/embed.py) so it
+    # doesn't reload the model on every call -- clear it so each test gets
+    # an embedder bound to its own tmp CACHE_DIR instead of a stale one
+    # left over from a previous test.
+    embed_module._build_cached_embedder.cache_clear()
     return embed_module
 
 
